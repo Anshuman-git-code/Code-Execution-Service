@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-import subprocess
+import docker
 
 app = FastAPI()
+docker_client = docker.from_env()
 
 class CodeRequest(BaseModel):
     code: str
@@ -10,16 +11,22 @@ class CodeRequest(BaseModel):
 @app.post("/execute")
 def execute_code(request: CodeRequest):
     try:
-        # Run the submitted code in a sandboxed process
-        result = subprocess.run(
-            ["python3", "-c", request.code],
-            capture_output=True,
-            text=True,
+        # Run code inside an isolated Docker container
+        container = docker_client.containers.run(
+            "code-sandbox",  # Use our sandbox image
+            ["python3", "-c", request.code],  # Execute code
+            remove=True,  # Auto-remove container after execution
+            mem_limit="200m",  # Limit memory usage
+            network_disabled=True,  # No internet access
             timeout=5  # Prevent infinite loops
         )
-        return {
-            "stdout": result.stdout,
-            "stderr": result.stderr
-        }
-    except subprocess.TimeoutExpired:
-        return {"error": "Execution timed out"}
+        return {"output": container.decode("utf-8")}
+    
+    except docker.errors.ContainerError as e:
+        return {"error": "Execution failed", "details": str(e)}
+    
+    except docker.errors.APIError as e:
+        return {"error": "Docker error", "details": str(e)}
+
+    except Exception as e:
+        return {"error": str(e)}
